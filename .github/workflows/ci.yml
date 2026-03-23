@@ -1,0 +1,86 @@
+name: CI-CD-Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  security-and-build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+
+    env:
+      IMAGE_NAME: farhanahmad43336/nodeapp
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      # -----------------------------
+      # Part 2: Security Scans (Non-Blocking)
+      # -----------------------------
+
+      - name: Run Gitleaks (Secret Scan)
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Semgrep (SAST)
+        run: |
+          pip install semgrep
+          semgrep scan --config auto .
+        continue-on-error: true
+
+      - name: Run Trivy FS Scan (Dependency Scan)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+        continue-on-error: true
+
+      # -----------------------------
+      # Part 3: Docker Build & Image Scan
+      # -----------------------------
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t $IMAGE_NAME:$IMAGE_TAG .
+
+      - name: Run Trivy Image Scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}'
+          format: 'table'
+        continue-on-error: true
+
+      # -----------------------------
+      # Part 4: Push Docker Image to Docker Hub
+      # -----------------------------
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Tag image as latest
+        run: |
+          docker tag $IMAGE_NAME:$IMAGE_TAG $IMAGE_NAME:latest
+
+      - name: Push Docker image (commit SHA)
+        run: |
+          docker push $IMAGE_NAME:$IMAGE_TAG
+
+      - name: Push Docker image (latest)
+        run: |
+          docker push $IMAGE_NAME:latest
